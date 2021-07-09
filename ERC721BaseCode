@@ -1,0 +1,154 @@
+//SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+/*
+	ERC721 Modifiable All-Inclusive Standard Token
+	For the purpose of creating contracts on the fly from working base code
+	Written by Martin McConnell, No attribution required.
+	ETH Tips appreciated: 0xB8D16214aD6Cb0E4967c3aeFCc8Bc5f74D386B0a
+*/
+
+import "./interfaces.sol";
+
+contract ERC721 {  //Change contract name BOTH here and in constructor
+    event Transfer(address indexed _from, address indexed _to, uint256 indexed _tokenId);
+    event Approval(address indexed _owner, address indexed _approved, uint256 indexed _tokenId);
+    event ApprovalForAll(address indexed _owner, address indexed _operator, bool _approved);
+
+	uint256 internal tokenTotal; //The total number of tokens that exist in the universe
+	address internal contractOwner;
+	
+	//Mapping from TokenId to TokenOwner
+	mapping (uint256 => address) private idOfOwner;
+	//Mapping from TokenId to ApprovedAddress for transfers
+	mapping (uint256 => address) private tokenApproval;
+	//Mapping from Owner address to a counter variable that tracks how many tokens they own
+	mapping (address => uint256) private ownerTokenCount;
+	//Mapping for Interfaces revealed by ERC165
+	mapping (bytes4 => bool) private _interfaces;
+	//Mapping for Approval for All Delegate/Operator
+	mapping (address => mapping(address=>bool)) private _approvalForAll;
+	
+	//************************CONSTRUCTOR***********************
+	constructor() {
+		//start the token count at zero, even if minting at creation
+		tokenTotal = 0;
+		contractOwner = msg.sender;
+		
+		// Define all of the required interfaces for the contract so it
+		// is compliant with the current ERC721 Standards and best practices
+		ERC721 contractname;   //*** SUPER IMPORTANT, CHANGE IDENTIFIER TO NAME OF THE CONTRACT!!!
+                                //Ex: If contract is called GG, then make this GG contractname;
+		//name included functions with contract name or interface functions with interface name
+		_interfaces[contractname.name.selector ^
+		            contractname.symbol.selector ^
+		            contractname.tokenURI.selector] = true;  //ERCs721Metadata Interface reports normal
+		_interfaces[contractname.onERC721Received.selector] = true; //ERC721TokenReceiver supported
+		_interfaces[contractname.supportsInterface.selector] = true; //ERC165 Standard Implemented
+		
+		//add some more interfaces for non-standard functions that should be visible outside the contractname
+		_interfaces[contractname.totalSupply.selector] = true;
+		
+	} //********************************************************
+	
+//	***************** Optional Functionality, some Legacy and other stuff ******
+	function totalSupply() external view returns (uint256) {
+		return tokenTotal;
+	}
+	function name() external view returns (string memory){
+		return "TokenName"; //specify directly to prevent gas fees
+	}
+	function symbol() external view returns (string memory){
+		return "$"; //specify directly to prevent gas fees
+	}
+	function tokenURI(uint256 _tokenId) external view returns (string memory){
+	    //Require that the token exists and has an owner
+	    require(idOfOwner[_tokenId] != address(0));
+	    
+		return "http://www.addresstomytokendata"; //specify directly to prevent gas fees
+	}
+	
+//	**************   ERC721 Specific Functions   ************************
+    function balanceOf(address _owner) external view returns (uint256){
+        require(_owner != address(0), "Invalid Owner Address: 0x0");
+    	return ownerTokenCount[_owner];
+    }
+    
+    function ownerOf(uint256 _tokenId) external view returns (address){
+        address _owner = idOfOwner[_tokenId];
+        require(_owner != address(0), "Invalid Token");
+    	return _owner;
+    }
+    
+    function transferFrom(address _from, address _to, uint256 _tokenId) external payable {
+    	//verify that the address is being called by the token owner or the owner approved the transaction.
+    	require(msg.sender == idOfOwner[_tokenId] || msg.sender == tokenApproval[_tokenId],
+    	            "You don't have permission to transfer this token.");
+    	require(_to != address(0));
+    	assert(ownerTokenCount[_from] > 0); //This should never be zero or less
+    	
+    	_transfer(_from, _to, _tokenId);
+    }
+    
+    function safeTransferFrom(address _from, address _to, uint256 _tokenId, bytes memory data) public payable{
+        require(idOfOwner[_tokenId] == msg.sender || tokenApproval[_tokenId] == msg.sender
+                || isApprovedForAll(idOfOwner[_tokenId], msg.sender), "Access Denied: Caller not Approved" );
+        require(_to != address(0), "Transfer Rejected: Invalid Receiver");
+        require(ERC165(_to).supportsInterface(0x150b7a02)); //check that ERC721Received is implemented
+        _transfer(_from, _to, _tokenId);
+    }
+
+    function safeTransferFrom(address _from, address _to, uint256 _tokenId) external payable{
+        safeTransferFrom(_from, _to, _tokenId, "");       
+    }
+    
+    function approve(address _approved, uint256 _tokenId) public payable {
+    	require(msg.sender == idOfOwner[_tokenId] || isApprovedForAll(idOfOwner[_tokenId], msg.sender)
+    	        , "Not Approved: requires owner or approved for all by owner");
+    	tokenApproval[_tokenId] = _approved;
+    	emit Approval(msg.sender, _approved, _tokenId);
+    }
+    
+    function setApprovalForAll(address _operator, bool _approved) public{
+        require(msg.sender != address(0));
+        require(_operator != msg.sender, "Not Approved: You are already the principle operator for this token");
+        //set approval for all to either true or false
+        _approvalForAll[msg.sender][_operator] = _approved;
+        //emit ApprovalForAll
+        emit ApprovalForAll(msg.sender, _operator, _approved);
+    }
+
+    function getApproved(uint256 _tokenId) public view returns (address){
+        address _owner = idOfOwner[_tokenId];
+        require(_owner != address(0), "Invalid Token");
+        return tokenApproval[_tokenId];
+    }
+
+    function isApprovedForAll(address _owner, address _operator) public view returns (bool){
+        return _approvalForAll[_owner][_operator];
+    }
+    
+    
+// **************************** ERC165 ********************************
+    function supportsInterface(bytes4 interfaceID) external view returns (bool){
+        //InterfaceID=0x01ffc9a7
+        return _interfaces[interfaceID]; 
+    }
+    
+// *********************** ERC721 Token Receiver **********************
+    function onERC721Received(address _operator, address _from, uint256 _tokenId, bytes calldata _data) external returns(bytes4) {
+        //InterfaceID=0x150b7a02
+        return this.onERC721Received.selector;
+    }
+    
+//	************ Subroutines to make for cleaner code above ***********
+    function _transfer(address _from, address _to, uint256 _tokenId) private {	
+    	//make the transfer
+    	tokenApproval[_tokenId] = address(0); //clear the approval to prevent a security loophole
+        
+    	ownerTokenCount[_from]--;
+    	ownerTokenCount[_to]++;
+    	idOfOwner[_tokenId] = _to;
+    	emit Transfer(_from, _to, _tokenId);
+    }
+}
